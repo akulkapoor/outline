@@ -70,6 +70,39 @@ describe("#changeRequests.submit", () => {
 
     expect(res.status).toEqual(400);
   });
+
+  it("should reject submitting the same draft twice", async () => {
+    const user = await buildUser();
+    const collection = await buildApprovalCollection(user.id, user.teamId);
+    const draft = await buildDraftDocument({
+      userId: user.id,
+      teamId: user.teamId,
+      collectionId: collection.id,
+    });
+
+    const firstRes = await server.post("/api/changeRequests.submit", user, {
+      body: {
+        draftDocumentId: draft.id,
+      },
+    });
+    expect(firstRes.status).toEqual(200);
+
+    const secondRes = await server.post("/api/changeRequests.submit", user, {
+      body: {
+        draftDocumentId: draft.id,
+      },
+    });
+
+    expect(secondRes.status).toEqual(400);
+
+    const openChangeRequests = await ChangeRequest.count({
+      where: {
+        draftDocumentId: draft.id,
+        status: ChangeRequestStatus.Submitted,
+      },
+    });
+    expect(openChangeRequests).toEqual(1);
+  });
 });
 
 describe("#changeRequests.approve", () => {
