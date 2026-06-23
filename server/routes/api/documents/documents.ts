@@ -64,6 +64,7 @@ import {
   FileOperation,
 } from "@server/models";
 import AttachmentHelper from "@server/models/helpers/AttachmentHelper";
+import { assertDraftCanMoveWhileUnderReview } from "@server/models/helpers/ChangeRequestHelper";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import SearchProviderManager from "@server/utils/SearchProviderManager";
@@ -1366,6 +1367,7 @@ router.post(
       transaction,
     });
     authorize(user, "move", document);
+    await assertDraftCanMoveWhileUnderReview(ctx, document);
 
     if (parentDocumentId) {
       const parent = await Document.findByPk(parentDocumentId, {

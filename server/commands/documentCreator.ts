@@ -1,10 +1,12 @@
 import type { Optional } from "utility-types";
 import { TextHelper } from "@shared/utils/TextHelper";
 import { Collection, Document, type Template } from "@server/models";
+import { assertDraftHasNoSubmittedChangeRequest } from "@server/models/helpers/ChangeRequestHelper";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { authorize } from "@server/policies";
 import type { APIContext } from "@server/types";
+import { InvalidRequestError } from "@server/errors";
 import { assertPresent } from "@server/validation";
 
 type Props = Optional<
@@ -95,6 +97,59 @@ export async function authorizeDocumentCreate(
 }
 
 /**
+ * Resolve the collection a document would be published into.
+ *
+ * @param ctx API context containing the acting user.
+ * @param document Document being published.
+ * @param collectionId Destination collection when the draft has none assigned.
+ * @return Resolved destination collection.
+ */
+async function resolvePublishCollection(
+  ctx: APIContext,
+  document: Document,
+  collectionId?: string | null
+): Promise<Collection | null | undefined> {
+  const { user } = ctx.state.auth;
+  const { transaction } = ctx.state;
+  const targetCollectionId = document.collectionId ?? collectionId ?? null;
+
+  if (!targetCollectionId) {
+    assertPresent(
+      collectionId,
+      "collectionId is required to publish a draft without collection"
+    );
+    return Collection.findByPk(collectionId!, {
+      userId: user.id,
+      transaction,
+    });
+  }
+
+  if (document.collection?.id === targetCollectionId) {
+    return document.collection;
+  }
+
+  return Collection.findByPk(targetCollectionId, {
+    userId: user.id,
+    transaction,
+  });
+}
+
+/**
+ * Reject direct publish when a collection requires maintainer approval.
+ *
+ * @param collection Collection the document would be published into.
+ */
+function assertCollectionAllowsDirectPublish(
+  collection: Collection | null | undefined
+) {
+  if (collection?.maintainerApprovalRequired) {
+    throw InvalidRequestError(
+      "This collection requires approval before publishing"
+    );
+  }
+}
+
+/**
  * Authorizes publishing a document into a collection and resolves the target
  * collection. Shared by the documents.update API route and the MCP
  * update_document tool. Publishing places a document into a collection, so it
@@ -113,28 +168,30 @@ export async function authorizeDocumentPublish(
   collectionId?: string | null
 ): Promise<Collection | null | undefined> {
   const { user } = ctx.state.auth;
-  const { transaction } = ctx.state;
-  let collection = document.collection;
+
+  if (document.isDraft) {
+    await assertDraftHasNoSubmittedChangeRequest(ctx, document.id);
+  }
+
+  const collection = await resolvePublishCollection(
+    ctx,
+    document,
+    collectionId
+  );
+  assertCollectionAllowsDirectPublish(collection);
+
+  if (document.collectionId && !document.collection && collection) {
+    document.collection = collection;
+  }
 
   if (document.isDraft) {
     authorize(user, "publish", document);
   }
 
-  if (!document.collectionId) {
-    assertPresent(
-      collectionId,
-      "collectionId is required to publish a draft without collection"
-    );
-    collection = await Collection.findByPk(collectionId!, {
-      userId: user.id,
-      transaction,
-    });
-  }
-
   if (document.parentDocumentId) {
     const parentDocument = await Document.findByPk(document.parentDocumentId, {
       userId: user.id,
-      transaction,
+      transaction: ctx.state.transaction,
     });
     authorize(user, "createChildDocument", parentDocument, { collection });
   } else {
@@ -249,11 +306,15 @@ export default async function documentCreator(
   );
 
   if (publish) {
-    if (!collectionId) {
-      throw new Error("Collection ID is required to publish");
-    }
+    const draft = await Document.findByPk(document.id, {
+      userId: user.id,
+      transaction,
+      rejectOnEmpty: true,
+    });
 
-    await document.publish(ctx, {
+    await authorizeDocumentPublish(ctx, draft, collectionId);
+
+    await draft.publish(ctx, {
       collectionId,
       silent: true,
       index,
