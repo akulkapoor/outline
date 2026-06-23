@@ -2,8 +2,12 @@ import { Op, UniqueConstraintError } from "sequelize";
 import { ChangeRequestStatus } from "@shared/types";
 import { InvalidRequestError } from "@server/errors";
 import { ChangeRequest, Collection, Document } from "@server/models";
+import {
+  buildSubmissionProposedChanges,
+} from "@server/models/helpers/ChangeRequestHelper";
 import { authorize } from "@server/policies";
 import type { APIContext } from "@server/types";
+import { assertPresent } from "@server/validation";
 
 type Props = {
   /** Draft document to submit for review. */
@@ -41,13 +45,15 @@ async function findOpenChangeRequest(
  */
 async function submitOpenChangeRequest(
   ctx: APIContext,
-  changeRequest: ChangeRequest
+  changeRequest: ChangeRequest,
+  collectionId: string
 ) {
   const { user } = ctx.state.auth;
 
   changeRequest.status = ChangeRequestStatus.Submitted;
   changeRequest.submittedById = user.id;
   changeRequest.submittedAt = new Date();
+  changeRequest.proposedChanges = buildSubmissionProposedChanges(collectionId);
   await changeRequest.saveWithCtx(ctx, undefined, {
     name: "submit",
   });
@@ -93,6 +99,8 @@ export default async function changeRequestSubmitter(
     );
   }
 
+  assertPresent(collection);
+
   authorize(user, "update", document);
 
   const existingChangeRequest = await findOpenChangeRequest(
@@ -105,7 +113,7 @@ export default async function changeRequestSubmitter(
   }
 
   if (existingChangeRequest) {
-    return submitOpenChangeRequest(ctx, existingChangeRequest);
+    return submitOpenChangeRequest(ctx, existingChangeRequest, collection.id);
   }
 
   try {
@@ -119,6 +127,7 @@ export default async function changeRequestSubmitter(
         status: ChangeRequestStatus.Submitted,
         submittedById: user.id,
         submittedAt: new Date(),
+        proposedChanges: buildSubmissionProposedChanges(collection.id),
       },
       { name: "submit" }
     );
@@ -142,6 +151,6 @@ export default async function changeRequestSubmitter(
       );
     }
 
-    return submitOpenChangeRequest(ctx, racedChangeRequest);
+    return submitOpenChangeRequest(ctx, racedChangeRequest, collection.id);
   }
 }

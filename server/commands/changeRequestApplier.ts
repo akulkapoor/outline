@@ -1,14 +1,16 @@
 import { ChangeRequestRejectionReason, ChangeRequestStatus } from "@shared/types";
 import { InvalidRequestError } from "@server/errors";
 import { Document, type ChangeRequest } from "@server/models";
+import {
+  assertChangeRequestDraftReadyForReviewAction,
+  resolveChangeRequestMaintainerStatus,
+} from "@server/models/helpers/ChangeRequestHelper";
 import { authorize } from "@server/policies";
 import type { APIContext } from "@server/types";
 
 type Props = {
   /** Change request to approve. */
   changeRequest: ChangeRequest;
-  /** Whether the acting user is a collection maintainer. */
-  isMaintainer: boolean;
 };
 
 /**
@@ -20,7 +22,7 @@ type Props = {
  */
 export default async function changeRequestApplier(
   ctx: APIContext,
-  { changeRequest, isMaintainer }: Props
+  { changeRequest }: Props
 ): Promise<ChangeRequest> {
   const { user } = ctx.state.auth;
   const { transaction } = ctx.state;
@@ -28,8 +30,6 @@ export default async function changeRequestApplier(
   if (changeRequest.status !== ChangeRequestStatus.Submitted) {
     throw InvalidRequestError("Only submitted change requests can be approved");
   }
-
-  authorize(user, "approve", changeRequest, { isMaintainer });
 
   const document = await Document.scope("withDrafts").findByPk(
     changeRequest.draftDocumentId,
@@ -44,11 +44,17 @@ export default async function changeRequestApplier(
     throw InvalidRequestError("This change request has already been applied");
   }
 
-  if (!document.collectionId) {
-    throw InvalidRequestError(
-      "Draft must belong to a collection before it can be approved"
-    );
-  }
+  await assertChangeRequestDraftReadyForReviewAction(
+    ctx,
+    changeRequest,
+    document
+  );
+
+  const isMaintainer = await resolveChangeRequestMaintainerStatus(
+    ctx,
+    document.collectionId
+  );
+  authorize(user, "approve", changeRequest, { isMaintainer });
 
   await document.publish(ctx, {
     collectionId: document.collectionId,
@@ -71,22 +77,40 @@ export default async function changeRequestApplier(
  *
  * @param ctx API context.
  * @param changeRequest Change request to reject.
- * @param isMaintainer Whether the acting user is a collection maintainer.
  * @param reviewNote Optional note from the reviewer.
  * @return The rejected change request.
  */
 export async function changeRequestRejecter(
   ctx: APIContext,
   changeRequest: ChangeRequest,
-  isMaintainer: boolean,
   reviewNote?: string
 ): Promise<ChangeRequest> {
   const { user } = ctx.state.auth;
+  const { transaction } = ctx.state;
 
   if (changeRequest.status !== ChangeRequestStatus.Submitted) {
     throw InvalidRequestError("Only submitted change requests can be rejected");
   }
 
+  const document = await Document.scope("withDrafts").findByPk(
+    changeRequest.draftDocumentId,
+    {
+      userId: user.id,
+      transaction,
+      rejectOnEmpty: true,
+    }
+  );
+
+  await assertChangeRequestDraftReadyForReviewAction(
+    ctx,
+    changeRequest,
+    document
+  );
+
+  const isMaintainer = await resolveChangeRequestMaintainerStatus(
+    ctx,
+    document.collectionId
+  );
   authorize(user, "reject", changeRequest, { isMaintainer });
 
   changeRequest.status = ChangeRequestStatus.Rejected;

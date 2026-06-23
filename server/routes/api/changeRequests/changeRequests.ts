@@ -68,8 +68,14 @@ async function annotateChangeRequestPolicies(
 
   const collection = await Collection.findByPk(collectionId, {
     transaction,
-    rejectOnEmpty: true,
+    paranoid: false,
   });
+
+  if (!collection || collection.deletedAt) {
+    changeRequest.isMaintainer = user.isAdmin;
+    return;
+  }
+
   changeRequest.isMaintainer = await isCollectionMaintainer(
     user,
     collection,
@@ -233,7 +239,6 @@ router.post(
 
     const approvedChangeRequest = await changeRequestApplier(ctx, {
       changeRequest,
-      isMaintainer: !!changeRequest.isMaintainer,
     });
 
     await approvedChangeRequest.reload({
@@ -271,7 +276,6 @@ router.post(
     const rejectedChangeRequest = await changeRequestRejecter(
       ctx,
       changeRequest,
-      !!changeRequest.isMaintainer,
       reviewNote
     );
 

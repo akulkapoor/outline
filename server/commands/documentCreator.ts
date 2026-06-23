@@ -1,6 +1,7 @@
 import type { Optional } from "utility-types";
 import { TextHelper } from "@shared/utils/TextHelper";
 import { Collection, Document, type Template } from "@server/models";
+import { assertDraftHasNoSubmittedChangeRequest } from "@server/models/helpers/ChangeRequestHelper";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { authorize } from "@server/policies";
@@ -167,6 +168,10 @@ export async function authorizeDocumentPublish(
   collectionId?: string | null
 ): Promise<Collection | null | undefined> {
   const { user } = ctx.state.auth;
+
+  if (document.isDraft) {
+    await assertDraftHasNoSubmittedChangeRequest(ctx, document.id);
+  }
 
   const collection = await resolvePublishCollection(
     ctx,

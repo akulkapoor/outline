@@ -8,7 +8,7 @@ import {
   buildUser,
 } from "@server/test/factories";
 import { getTestServer } from "@server/test/support";
-import { ChangeRequest, Document } from "@server/models";
+import { ChangeRequest, Collection, Document } from "@server/models";
 import { serialize } from "@server/policies";
 
 const server = getTestServer();
@@ -353,5 +353,225 @@ describe("direct publish gate", () => {
     });
 
     expect(res.status).toEqual(400);
+  });
+
+  it("should reject direct publish while a change request is under review", async () => {
+    const user = await buildUser();
+    const approvalCollection = await buildApprovalCollection(
+      user.id,
+      user.teamId
+    );
+    const openCollection = await buildCollection({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const draft = await buildDraftDocument({
+      userId: user.id,
+      teamId: user.teamId,
+      collectionId: approvalCollection.id,
+    });
+
+    await server.post("/api/changeRequests.submit", user, {
+      body: {
+        draftDocumentId: draft.id,
+      },
+    });
+
+    await draft.update({ collectionId: openCollection.id });
+
+    const res = await server.post("/api/documents.update", user, {
+      body: {
+        id: draft.id,
+        publish: true,
+      },
+    });
+
+    expect(res.status).toEqual(400);
+  });
+});
+
+describe("draft move while under review", () => {
+  it("should reject moving a draft with a submitted change request", async () => {
+    const user = await buildUser();
+    const approvalCollection = await buildApprovalCollection(
+      user.id,
+      user.teamId
+    );
+    const openCollection = await buildCollection({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const draft = await buildDraftDocument({
+      userId: user.id,
+      teamId: user.teamId,
+      collectionId: approvalCollection.id,
+    });
+
+    await server.post("/api/changeRequests.submit", user, {
+      body: {
+        draftDocumentId: draft.id,
+      },
+    });
+
+    const res = await server.post("/api/documents.move", user, {
+      body: {
+        id: draft.id,
+        collectionId: openCollection.id,
+      },
+    });
+
+    expect(res.status).toEqual(400);
+  });
+});
+
+describe("review after draft collection changes", () => {
+  it("should reject approval when the draft was moved after submission", async () => {
+    const author = await buildUser();
+    const maintainer = await buildUser({ teamId: author.teamId });
+    const approvalCollection = await buildApprovalCollection(
+      author.id,
+      author.teamId
+    );
+    const otherCollection = await buildApprovalCollection(
+      author.id,
+      author.teamId
+    );
+    await buildCollectionMaintainer({
+      collectionId: approvalCollection.id,
+      userId: maintainer.id,
+    });
+    const draft = await buildDraftDocument({
+      userId: author.id,
+      teamId: author.teamId,
+      collectionId: approvalCollection.id,
+    });
+
+    const submitRes = await server.post("/api/changeRequests.submit", author, {
+      body: {
+        draftDocumentId: draft.id,
+      },
+    });
+    const submitBody = await submitRes.json();
+
+    await draft.update({ collectionId: otherCollection.id });
+
+    const res = await server.post("/api/changeRequests.approve", maintainer, {
+      body: {
+        id: submitBody.data.id,
+      },
+    });
+
+    expect(res.status).toEqual(400);
+  });
+
+  it("should reject approval from a maintainer of a different collection", async () => {
+    const author = await buildUser();
+    const maintainer = await buildUser({ teamId: author.teamId });
+    const approvalCollection = await buildApprovalCollection(
+      author.id,
+      author.teamId
+    );
+    const otherCollection = await buildApprovalCollection(
+      author.id,
+      author.teamId
+    );
+    await buildCollectionMaintainer({
+      collectionId: approvalCollection.id,
+      userId: maintainer.id,
+    });
+    const draft = await buildDraftDocument({
+      userId: author.id,
+      teamId: author.teamId,
+      collectionId: otherCollection.id,
+    });
+    const changeRequest = await buildChangeRequest({
+      userId: author.id,
+      collectionId: otherCollection.id,
+      status: ChangeRequestStatus.Submitted,
+      submittedById: author.id,
+      submittedAt: new Date(),
+      draftDocumentId: draft.id,
+      proposedChanges: {
+        submissionCollectionId: otherCollection.id,
+      },
+    });
+
+    const res = await server.post("/api/changeRequests.approve", maintainer, {
+      body: {
+        id: changeRequest.id,
+      },
+    });
+
+    expect(res.status).toEqual(403);
+  });
+});
+
+describe("deleted collection handling", () => {
+  it("should still allow authors to withdraw when the collection was deleted", async () => {
+    const author = await buildUser();
+    const collection = await buildApprovalCollection(author.id, author.teamId);
+    const draft = await buildDraftDocument({
+      userId: author.id,
+      teamId: author.teamId,
+      collectionId: collection.id,
+    });
+
+    const submitRes = await server.post("/api/changeRequests.submit", author, {
+      body: {
+        draftDocumentId: draft.id,
+      },
+    });
+    const submitBody = await submitRes.json();
+
+    await Collection.update(
+      { deletedAt: new Date() },
+      { where: { id: collection.id }, paranoid: false }
+    );
+
+    const res = await server.post("/api/changeRequests.withdraw", author, {
+      body: {
+        id: submitBody.data.id,
+      },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.status).toEqual(ChangeRequestStatus.Withdrawn);
+  });
+
+  it("should still list change requests when the collection was deleted", async () => {
+    const author = await buildUser();
+    const maintainer = await buildUser({ teamId: author.teamId });
+    const collection = await buildApprovalCollection(author.id, author.teamId);
+    await buildCollectionMaintainer({
+      collectionId: collection.id,
+      userId: maintainer.id,
+    });
+    const draft = await buildDraftDocument({
+      userId: author.id,
+      teamId: author.teamId,
+      collectionId: collection.id,
+    });
+
+    await server.post("/api/changeRequests.submit", author, {
+      body: {
+        draftDocumentId: draft.id,
+      },
+    });
+
+    await Collection.update(
+      { deletedAt: new Date() },
+      { where: { id: collection.id }, paranoid: false }
+    );
+
+    const res = await server.post("/api/changeRequests.list", maintainer, {
+      body: {
+        status: ChangeRequestStatus.Submitted,
+      },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.length).toEqual(1);
   });
 });
