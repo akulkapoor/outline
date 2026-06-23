@@ -106,7 +106,13 @@ allow(User, "publish", Document, (actor, document) =>
     //
     !!document?.isDraft,
     can(actor, "update", document),
-    !document?.collection?.maintainerApprovalRequired
+    or(
+      !document?.collectionId,
+      and(
+        !!document?.collection,
+        !document.collection.maintainerApprovalRequired
+      )
+    )
   )
 );
 

@@ -290,6 +290,26 @@ describe("change request policies", () => {
     expect(abilities.publish).toEqual(false);
   });
 
+  it("should deny publish when collection association is not loaded", async () => {
+    const user = await buildUser();
+    const collection = await buildCollection({
+      userId: user.id,
+      teamId: user.teamId,
+      maintainerApprovalRequired: false,
+    });
+    const draft = await buildDraftDocument({
+      userId: user.id,
+      teamId: user.teamId,
+      collectionId: collection.id,
+    });
+    const document = await Document.scope("withDrafts").findByPk(draft.id);
+    document.collection = undefined;
+
+    const abilities = serialize(user, document);
+
+    expect(abilities.publish).toEqual(false);
+  });
+
   it("should allow team admins to approve submitted change requests", async () => {
     const admin = await buildAdmin();
     const author = await buildUser({ teamId: admin.teamId });

@@ -352,4 +352,31 @@ describe("documentCreator", () => {
       expect(contentStr).toContain(`"data-name":"${customEmojiId}"`);
     });
   });
+
+  describe("approval required collections", () => {
+    it("should reject publish when collection requires approval", async () => {
+      const user = await buildUser();
+      const collection = await buildCollection({
+        userId: user.id,
+        teamId: user.teamId,
+        maintainerApprovalRequired: true,
+      });
+      const parent = await buildDocument({
+        userId: user.id,
+        teamId: user.teamId,
+        collectionId: collection.id,
+      });
+
+      await expect(
+        withAPIContext(user, (ctx) =>
+          documentCreator(ctx, {
+            title: "Child page",
+            parentDocumentId: parent.id,
+            collectionId: collection.id,
+            publish: true,
+          })
+        )
+      ).rejects.toThrow("This collection requires approval before publishing");
+    });
+  });
 });
