@@ -31,11 +31,14 @@ export default async function changeRequestApplier(
 
   authorize(user, "approve", changeRequest, { isMaintainer });
 
-  const document = await Document.findByPk(changeRequest.draftDocumentId, {
-    userId: user.id,
-    transaction,
-    rejectOnEmpty: true,
-  });
+  const document = await Document.scope("withDrafts").findByPk(
+    changeRequest.draftDocumentId,
+    {
+      userId: user.id,
+      transaction,
+      rejectOnEmpty: true,
+    }
+  );
 
   if (!document.isDraft) {
     throw InvalidRequestError("This change request has already been applied");

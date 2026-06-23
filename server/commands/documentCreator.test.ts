@@ -172,7 +172,9 @@ describe("documentCreator", () => {
             publish: true,
           })
         )
-      ).rejects.toThrow("Collection ID is required to publish");
+      ).rejects.toThrow(
+        "collectionId is required to publish a draft without collection"
+      );
     });
   });
 

@@ -168,16 +168,20 @@ export async function authorizeDocumentPublish(
 ): Promise<Collection | null | undefined> {
   const { user } = ctx.state.auth;
 
-  if (document.isDraft) {
-    authorize(user, "publish", document);
-  }
-
   const collection = await resolvePublishCollection(
     ctx,
     document,
     collectionId
   );
   assertCollectionAllowsDirectPublish(collection);
+
+  if (document.collectionId && !document.collection && collection) {
+    document.collection = collection;
+  }
+
+  if (document.isDraft) {
+    authorize(user, "publish", document);
+  }
 
   if (document.parentDocumentId) {
     const parentDocument = await Document.findByPk(document.parentDocumentId, {
@@ -297,14 +301,15 @@ export default async function documentCreator(
   );
 
   if (publish) {
-    const collection = await resolvePublishCollection(
-      ctx,
-      document,
-      collectionId
-    );
-    assertCollectionAllowsDirectPublish(collection);
+    const draft = await Document.findByPk(document.id, {
+      userId: user.id,
+      transaction,
+      rejectOnEmpty: true,
+    });
 
-    await document.publish(ctx, {
+    await authorizeDocumentPublish(ctx, draft, collectionId);
+
+    await draft.publish(ctx, {
       collectionId,
       silent: true,
       index,

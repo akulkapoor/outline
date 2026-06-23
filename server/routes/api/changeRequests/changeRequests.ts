@@ -82,9 +82,11 @@ router.post(
   auth(),
   pagination(),
   validate(T.ChangeRequestsListSchema),
+  transaction(),
   async (ctx: APIContext<T.ChangeRequestsListReq>) => {
     const { status, collectionId, draftDocumentId } = ctx.input.body;
     const { user } = ctx.state.auth;
+    const { transaction } = ctx.state;
     const maintainedCollectionIds = user.isAdmin
       ? null
       : await maintainedCollectionIdsForUser(user);
@@ -140,7 +142,7 @@ router.post(
 
     await Promise.all(
       changeRequests.map((changeRequest) =>
-        annotateChangeRequestPolicies(user, changeRequest)
+        annotateChangeRequestPolicies(user, changeRequest, transaction)
       )
     );
 

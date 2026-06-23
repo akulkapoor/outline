@@ -352,6 +352,6 @@ describe("direct publish gate", () => {
       },
     });
 
-    expect(res.status).toEqual(403);
+    expect(res.status).toEqual(400);
   });
 });
